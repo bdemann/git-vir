@@ -1,4 +1,4 @@
-import {awaitedForEach, log} from '@augment-vir/common';
+import {awaitedForEach, log, shellQuote} from '@augment-vir/common';
 import {runShellCommand} from '@augment-vir/node';
 import {type SimpleGit} from 'simple-git';
 import {LoggedError} from '../cli/logged.error.js';
@@ -10,7 +10,7 @@ import {
     forcePush,
     rebaseOnto,
 } from '../git/branch.js';
-import {listOpenPullRequestsWithBase, type PullRequest} from './pull-request-data.js';
+import {listPullRequests, type PullRequest} from './pull-request-data.js';
 
 export async function updateStackedPullRequest({
     cwd,
@@ -33,10 +33,9 @@ export async function updateStackedPullRequest({
     const originalParentRef = parentPullRequest.headRefOid;
 
     /** Must run before the rebases below, while each child's `headRefOid` is still pre-rebase. */
-    const childPullRequests = await listOpenPullRequestsWithBase({
-        cwd,
-        baseRefName: parentPullRequest.headRefName,
-    });
+    const childPullRequests = await listPullRequests(cwd, [
+        `--base ${shellQuote(parentPullRequest.headRefName)}`,
+    ]);
     if (!childPullRequests.length) {
         return 0;
     }

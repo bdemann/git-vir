@@ -1,94 +1,47 @@
 import {assert} from '@augment-vir/assert';
-import {describe, it} from '@augment-vir/test';
+import {shellQuote} from '@augment-vir/common';
+import {describe, it, itCases} from '@augment-vir/test';
 import {loadTestCwd} from '../test-cwd.test-helper.js';
-import {
-    assertCompletePullRequestList,
-    createPullRequestListCommand,
-    escapeShellArgument,
-    listOpenPullRequests,
-    listOpenPullRequestsWithBase,
-    listOpenPullRequestsWithHead,
-    maxPullRequestListLength,
-    pullRequestShape,
-    type PullRequest,
-} from './pull-request-data.js';
+import {createPullRequestListCommand, listPullRequests} from './pull-request-data.js';
 
-function createTestPullRequests(count: number): ReadonlyArray<Readonly<PullRequest>> {
-    return Array.from(
-        {
-            length: count,
-        },
-        (unusedEntry, index): PullRequest => {
-            return {
-                ...pullRequestShape.default,
-                headRefName: `branch-${index}`,
-                number: index,
-            };
-        },
-    );
-}
-
-describe(escapeShellArgument.name, () => {
-    it('quotes a plain branch name', () => {
-        assert.strictEquals(escapeShellArgument('my-branch'), "'my-branch'");
-    });
-
-    it('neutralizes shell syntax', () => {
-        assert.strictEquals(escapeShellArgument('a$(b)&c;d|e'), "'a$(b)&c;d|e'");
-    });
-
-    it('escapes single quotes', () => {
-        assert.strictEquals(escapeShellArgument("it's"), String.raw`'it'\''s'`);
-    });
-});
+const baseCommand =
+    'gh pr list --state open --limit 1000 --json baseRefName,headRefName,id,title,isDraft,number,headRefOid,state,url';
 
 describe(createPullRequestListCommand.name, () => {
-    it('sets an explicit limit', () => {
-        assert.isTrue(
-            createPullRequestListCommand().includes(`--limit ${maxPullRequestListLength}`),
-        );
-    });
-
-    it('only lists open PRs', () => {
-        assert.isTrue(createPullRequestListCommand().includes('--state open'));
-    });
-
-    it('appends filter args', () => {
-        assert.isTrue(
-            createPullRequestListCommand([
-                `--head ${escapeShellArgument('my-branch')}`,
-            ]).endsWith("--head 'my-branch'"),
-        );
-    });
+    itCases(createPullRequestListCommand, [
+        {
+            it: 'sets an explicit limit and open state',
+            input: [],
+            expect: baseCommand,
+        },
+        {
+            it: 'appends a head filter',
+            input: [
+                `--head ${shellQuote('my-branch')}`,
+            ],
+            expect: `${baseCommand} --head 'my-branch'`,
+        },
+        {
+            it: 'appends a base filter',
+            input: [
+                `--base ${shellQuote("it's")}`,
+            ],
+            expect: String.raw`${baseCommand} --base 'it'\''s'`,
+        },
+    ]);
 });
 
-describe(assertCompletePullRequestList.name, () => {
-    it('accepts a list under the limit', () => {
-        assert.doesNotThrow(() =>
-            assertCompletePullRequestList(createTestPullRequests(maxPullRequestListLength - 1)),
-        );
-    });
-
-    it('rejects a list at the limit', () => {
-        assert.throws(() =>
-            assertCompletePullRequestList(createTestPullRequests(maxPullRequestListLength)),
-        );
-    });
-});
-
-describe(listOpenPullRequests.name, () => {
+describe(listPullRequests.name, () => {
     it('gets pull requests', async () => {
         const testCwd = await loadTestCwd();
-        const output = await listOpenPullRequests(testCwd || process.cwd());
+        const output = await listPullRequests(testCwd || process.cwd(), []);
 
         if (testCwd) {
             console.info(output);
             assert.isLengthAtLeast(output, 1);
         }
     });
-});
 
-describe(listOpenPullRequestsWithHead.name, () => {
     it('only gets the given head branch', async () => {
         const testCwd = await loadTestCwd();
 
@@ -96,23 +49,38 @@ describe(listOpenPullRequestsWithHead.name, () => {
             return;
         }
 
-        const allPullRequests = await listOpenPullRequests(testCwd);
+        const allPullRequests = await listPullRequests(testCwd, []);
         assert.isLengthAtLeast(allPullRequests, 1);
-        const expectedPullRequest = allPullRequests[0];
+        const expectedHeadRefName = allPullRequests[0].headRefName;
 
-        const output = await listOpenPullRequestsWithHead({
-            cwd: testCwd,
-            headRefName: expectedPullRequest.headRefName,
-        });
+        const output = await listPullRequests(testCwd, [
+            `--head ${shellQuote(expectedHeadRefName)}`,
+        ]);
 
         assert.isLengthAtLeast(output, 1);
         assert.isTrue(
-            output.every(
-                (pullRequest) => pullRequest.headRefName === expectedPullRequest.headRefName,
-            ),
+            output.every((pullRequest) => pullRequest.headRefName === expectedHeadRefName),
         );
+    });
+
+    it('only gets the given base branch', async () => {
+        const testCwd = await loadTestCwd();
+
+        if (!testCwd) {
+            return;
+        }
+
+        const allPullRequests = await listPullRequests(testCwd, []);
+        assert.isLengthAtLeast(allPullRequests, 1);
+        const expectedBaseRefName = allPullRequests[0].baseRefName;
+
+        const output = await listPullRequests(testCwd, [
+            `--base ${shellQuote(expectedBaseRefName)}`,
+        ]);
+
+        assert.isLengthAtLeast(output, 1);
         assert.isTrue(
-            output.some((pullRequest) => pullRequest.number === expectedPullRequest.number),
+            output.every((pullRequest) => pullRequest.baseRefName === expectedBaseRefName),
         );
     });
 
@@ -124,35 +92,10 @@ describe(listOpenPullRequestsWithHead.name, () => {
         }
 
         assert.deepEquals(
-            await listOpenPullRequestsWithHead({
-                cwd: testCwd,
-                headRefName: 'git-vir-branch-that-does-not-exist',
-            }),
+            await listPullRequests(testCwd, [
+                `--head ${shellQuote('git-vir-branch-that-does-not-exist')}`,
+            ]),
             [],
-        );
-    });
-});
-
-describe(listOpenPullRequestsWithBase.name, () => {
-    it('only gets the given base branch', async () => {
-        const testCwd = await loadTestCwd();
-
-        if (!testCwd) {
-            return;
-        }
-
-        const allPullRequests = await listOpenPullRequests(testCwd);
-        assert.isLengthAtLeast(allPullRequests, 1);
-        const expectedBaseRefName = allPullRequests[0].baseRefName;
-
-        const output = await listOpenPullRequestsWithBase({
-            cwd: testCwd,
-            baseRefName: expectedBaseRefName,
-        });
-
-        assert.isLengthAtLeast(output, 1);
-        assert.isTrue(
-            output.every((pullRequest) => pullRequest.baseRefName === expectedBaseRefName),
         );
     });
 });
